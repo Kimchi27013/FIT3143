@@ -37,12 +37,6 @@ int main(int argc, char *argv[])
     int writeToTxt = (n > 100) ? 1 : 0;
 
     // Store whether each number is prime
-    int *isPrime = calloc(n, sizeof(int));
-
-    if (isPrime == NULL) {
-        printf("Error: Could not allocate memory.\n");
-        return 1;
-    }
 
     // Parallelise the primality tests
     #pragma omp parallel for schedule(static)
@@ -56,9 +50,6 @@ int main(int argc, char *argv[])
                 break;
             }
         }
-
-        // Each thread writes to a unique array element
-        isPrime[i] = prime;
 
         // Protect output from multiple threads
         if (writeToTxt && prime) {
