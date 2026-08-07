@@ -18,9 +18,33 @@ int main(int argc, char *argv[])
         printf("Usage: %s max_number\n", argv[0]);
         return 1; // Return non-zero to indicate an error
     }
+    
+    const char *filename = "prime-out.txt";
 
-	for (int i = 0; i < argv[1]; i++) {
-        printf("argv[%d] = %s\n", i, argv[i]);
+    FILE *fp = fopen(filename, "w");
+    
+    if (fp == NULL) {
+        printf("Error opening file!\n");
+        return 1;
+    }
+
+	for (int i = 2; i < *argv[1]; i++) {
+        int prime = 1;
+
+        for (int j = 2; j < i; j++) {
+            if (i%j == 0) {
+                prime = 0;
+            }
+        }
+
+        if (prime == 1) {
+            if (i < 100) {
+                printf("%d\n", i);
+            } 
+            else {
+                fprintf(fp, "%d\n", i);
+            }
+        }
     }
 
     return 0;
