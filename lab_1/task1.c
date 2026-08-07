@@ -13,6 +13,10 @@ b) a text file (for larger n values, e.g., n > 100).
 #include <stdlib.h>
 #include <time.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
 int main(int argc, char *argv[])
 {	
     if (argc < 2) {
@@ -31,22 +35,26 @@ int main(int argc, char *argv[])
     }
 
     clock_t start = clock();
+    int n = atoi(argv[1]);
 
-	for (int i = 2; i < atoi(argv[1]); i++) {
+    // Decide ONCE, before the loop, where output goes.
+    int writeToTxt = (n > 100) ? 1 : 0;
+
+    for (int i = 2; i < n; i++) {
         int prime = 1;
 
         for (int j = 2; j < i; j++) {
-            if (i%j == 0) {
+            if (i % j == 0) {
                 prime = 0;
+                break;
             }
         }
 
         if (prime == 1) {
-            if (i < 100) {
-                printf("%d\n", i);
-            } 
-            else {
+            if (writeToTxt) {
                 fprintf(fp, "%d\n", i);
+            } else {
+                printf("%d\n", i);
             }
         }
     }
@@ -58,6 +66,8 @@ int main(int argc, char *argv[])
     double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
 
     printf("CPU time used: %f seconds\n", cpu_time_used);
+
+    fclose(fp);
 
     return 0;
 }
