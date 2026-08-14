@@ -1,0 +1,64 @@
+Task 1
+
+No parallelism:
+n = 10000000 CPU time used: 4.448342 seconds
+n = 100000000 CPU time used: 100.087765 seconds
+n = 200000000 CPU time used: 312.151968 seconds
+
+POSIX threads:
+n = 10000000 CPU time used: 4.362367 seconds
+n = 100000000 CPU time used: 102.208774 seconds
+n = 200000000 CPU time used: 341.734605 seconds
+
+OpenMP:
+n = 10000000 CPU time used: 8.572179 seconds
+n = 100000000 CPU time used: 199.914347 seconds
+n = 200000000 CPU time used: 86.364117 seconds
+
+
+a) (Task 1) Serial code [Estimated Presentation Time: 1 min]
+The section introduces your approach to implementing the serial code to find prime numbers.
+b) (Task 2) POSIX Threads [Estimated Presentation Time: 3 min]
+The section introduces your approach to implementing the parallel version with POSIX
+Threads. You are required to discuss your parallel partitioning scheme (workload distribution)
+and produce graphs comparing your Task 2 implementation against Task 1.
+You are required to produce the following graphs:
+1) Comparing the run time of serial code vs parallel code (POSIX Threads) with increasing
+size of n.
+2) Showcasing the speedup of the parallel code (POSIX Threads) with increasing size of n.
+4
+You are also required to produce the following graphs:
+3) Comparing the run time of serial code vs parallel code (POSIX Threads) with an
+increasing number of threads.
+4) Showcasing the speedup of the parallel code (POSIX Threads) with an increasing number
+of threads.
+c) (Task 3) Open MP [ETA: 2 min]
+The section introduces your approach to implementing the parallel version with OpenMP. You
+are required to discuss your parallel partitioning scheme (workload distribution) and produce
+graphs comparing your Task 3 implementation against Task 1 and Task 2.
+You are required to produce the following graphs:
+5) Comparing the run time of serial code vs parallel code (OpenMP) with increasing size of n.
+6) Showcasing the speedup of the parallel code (OpenMP) with increasing size of n.
+You are also required to produce the following graphs:
+7) Comparing the run time of parallel code (POSIX Thread) vs parallel code (OpenMP) with
+increasing size of n.
+8) Comparing the run time of parallel code (POSIX Thread) vs parallel code (OpenMP) with
+an increasing number of threads.
+d) Conclusion and Recommendations [ETA: 1 min]
+The section concludes the presentation and discusses major issues, limitations, and future
+work.
+Note: To obtain statistically convincing evidence, you should test with at least 30 different
+numbers of n. You may also need to increase n further to obtain significant results (depending
+on your machine hardware).
+Note: Make sure you test the number of threads from 1 up to at least the number of cores
+available in your CPU. What would happen if you increase the number of threads more than
+the number of cores available in your machine?
+e) Q&A [ETA: 1 to 2 min]
+The section invites questions from the audience (TA/makers). The teaching team will ask
+questions related to your presentation and the submitted files.
+Note: Practice makes perfect. If you are still deciding what to present and searching for
+information/content from the slides, chances are you will not be able to present within the
+time limit.
+Note: You are allowed to put extra slides as an appendix (after the Q&A section) for your
+own convenience. Make sure they are clearly labelled so that markers will not be confused
+or mix them up with the other required sections
