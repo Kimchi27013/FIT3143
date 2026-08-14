@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    const char *filename = "prime-out-3.txt";
+    const char *filename = "prime-out-openmp.txt";
     FILE *fp = fopen(filename, "w");
 
     if (fp == NULL) {
@@ -28,7 +28,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    clock_t start = clock();
+    double start = omp_get_wtime();
 
     // Convert command-line argument to an integer
     int n = atoi(argv[1]);
@@ -37,6 +37,12 @@ int main(int argc, char *argv[])
     int writeToTxt = (n > 100) ? 1 : 0;
 
     // Store whether each number is prime
+    int *is_prime = calloc(n, sizeof(int));
+    if (is_prime == NULL) {
+        printf("Error allocating memory!\n");
+        fclose(fp);
+        return 1;
+    }
 
     // Parallelise the primality tests
     #pragma omp parallel for schedule(static)
@@ -51,25 +57,25 @@ int main(int argc, char *argv[])
             }
         }
 
-        // Protect output from multiple threads
-        if (writeToTxt && prime) {
-            #pragma omp critical
-            fprintf(fp, "%d\n", i);
-        }
-        else if (!writeToTxt && prime) {
-            #pragma omp critical
-            printf("%d\n", i);
+        is_prime[i] = prime;
+    }
+
+    // Print after all threads finish so the results stay in ascending order
+    for (int i = 2; i < n; i++) {
+        if (is_prime[i]) {
+            if (writeToTxt) {
+                fprintf(fp, "%d\n", i);
+            } else {
+                printf("%d\n", i);
+            }
         }
     }
 
-    clock_t end = clock();
-
-    // Calculate and display CPU time
-    double cpu_time_used =
-        ((double)(end - start)) / CLOCKS_PER_SEC;
+    double cpu_time_used = omp_get_wtime() - start;
 
     printf("CPU time used: %f seconds\n", cpu_time_used);
 
+    free(is_prime);
     fclose(fp);
 
     return 0;
