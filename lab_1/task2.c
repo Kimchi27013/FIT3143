@@ -1,158 +1,159 @@
 /*
-Write and implement a parallel version (“task2.c”) of your serial code in C utilising POSIX
-Threads.
-In this part, your team will need to design a parallel partitioning scheme to distribute the workload
-among the threads and implement it in C.
-After you implement the task, measure again the time required to search for prime numbers less
-than an integer n and compute the speed-up by your parallel implementation. Make sure your
-code can still produce a sorted list of prime numbers (in ascending order). You should test for
-different values of n and tabulate the serial and parallel computation times. Based on the
-tabulated results, you can compute the speedup for different n values. We recommend that you
-first test with n > 10,000,000 and then increase n.
+Parallel prime-number search using POSIX threads.
 
+The program finds all prime numbers strictly less than the positive integer
+given on the command line. Results are printed to standard output when
+n <= 100 and written to prime-out-posix.txt otherwise.
 */
 
+#include <errno.h>
+#include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <pthread.h>
 
 #define NUM_THREADS 12
 
 struct thread_args {
-    int length;
-    int* range;
-    int* prime_list;
+    int start;
+    int end;
+    unsigned char *prime_list;
 };
 
-void* calculate_prime(void *arg) {
-    struct thread_args *data = (struct thread_args *)arg;
+static void *calculate_prime(void *arg)
+{
+    struct thread_args *data = arg;
 
-    int length = data->length;
-    int* range = data->range;
-    int* prime_list = data->prime_list;
+    for (int p = data->start; p < data->end; p++) {
+        int prime = 1;
 
-    int prime;
-    int p;
-
-    for (int i = 0; i<length; i++) {
-        p = range[i];
-        prime = 1;
-        for (int j = 2; j*j < p; j++) {
-            if (p%j == 0) {
+        /* Using p / j avoids overflow from calculating j * j. */
+        for (int j = 2; j <= p / j; j++) {
+            if (p % j == 0) {
                 prime = 0;
                 break;
             }
         }
 
-        prime_list[p-1] = prime;
+        data->prime_list[p] = (unsigned char)prime;
     }
 
-    free(data);
-
-    pthread_exit(NULL); // Terminate thread cleanly
+    return NULL;
 }
 
 int main(int argc, char *argv[])
-{	
-    if (argc < 2) {
-        printf("Error: Please provide at least one argument.\n");
-        printf("Usage: %s max_number\n", argv[0]);
-        return 1; // Return non-zero to indicate an error
+{
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s max_number\n", argv[0]);
+        return EXIT_FAILURE;
     }
-    
+
+    errno = 0;
+    char *end_pointer = NULL;
+    long input = strtol(argv[1], &end_pointer, 10);
+
+    if (errno != 0 || end_pointer == argv[1] || *end_pointer != '\0' ||
+        input < 2 || input > INT_MAX) {
+        fprintf(stderr, "Error: max_number must be an integer from 2 to %d.\n",
+                INT_MAX);
+        return EXIT_FAILURE;
+    }
+
+    int number = (int)input;
     const char *filename = "prime-out-posix.txt";
-
     FILE *fp = fopen(filename, "w");
-    
+
     if (fp == NULL) {
-        printf("Error opening file!\n");
-        return 1;
+        perror("Error opening output file");
+        return EXIT_FAILURE;
     }
 
-    struct timespec start, end;
+    unsigned char *prime_indicator = calloc((size_t)number,
+                                             sizeof(*prime_indicator));
+    if (prime_indicator == NULL) {
+        perror("Failed to allocate the prime array");
+        fclose(fp);
+        return EXIT_FAILURE;
+    }
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    struct timespec start_time;
+    struct timespec end_time;
 
+    if (clock_gettime(CLOCK_MONOTONIC, &start_time) != 0) {
+        perror("Failed to start the timer");
+        free(prime_indicator);
+        fclose(fp);
+        return EXIT_FAILURE;
+    }
+
+    int candidate_count = number - 2;
+    int thread_count = candidate_count < NUM_THREADS
+                           ? candidate_count
+                           : NUM_THREADS;
     pthread_t threads[NUM_THREADS];
-    struct thread_args thread_args[NUM_THREADS];
+    struct thread_args arguments[NUM_THREADS];
+    int created_threads = 0;
 
-    int *prime_indicator = malloc((atoi(argv[1])) * sizeof(int));
+    for (int i = 0; i < thread_count; i++) {
+        /* These boundaries cover [2, number) exactly once. */
+        arguments[i].start =
+            2 + (int)((long long)i * candidate_count / thread_count);
+        arguments[i].end =
+            2 + (int)((long long)(i + 1) * candidate_count / thread_count);
+        arguments[i].prime_list = prime_indicator;
 
-    for (int i=0; i < NUM_THREADS; i++) {
-        struct thread_args *args = malloc(sizeof(struct thread_args));
-        if (args == NULL) {
-            perror("Failed to allocate memory");
-            return 1;
+        int error = pthread_create(&threads[i], NULL, calculate_prime,
+                                   &arguments[i]);
+        if (error != 0) {
+            fprintf(stderr, "Failed to create thread %d (error %d).\n", i,
+                    error);
+            break;
         }
 
-        int *list = malloc(((atoi(argv[1])-1)/2)*sizeof(int));
-        for (int j=i*atoi(argv[1])/NUM_THREADS+2; j<i*atoi(argv[1])/NUM_THREADS+2+atoi(argv[1])/NUM_THREADS; j++) {
-            list1[j-(i*atoi(argv[1])/NUM_THREADS+2)] = j;
+        created_threads++;
+    }
+
+    for (int i = 0; i < created_threads; i++) {
+        int error = pthread_join(threads[i], NULL);
+        if (error != 0) {
+            fprintf(stderr, "Failed to join thread %d (error %d).\n", i,
+                    error);
+            free(prime_indicator);
+            fclose(fp);
+            return EXIT_FAILURE;
         }
     }
 
+    if (created_threads != thread_count) {
+        free(prime_indicator);
+        fclose(fp);
+        return EXIT_FAILURE;
     }
 
-
-    
-
-    // 4. Initialize the data structure
-    args1->length = ((atoi(argv[1])-1)/2);
-    args1->range = list1;
-    args1->prime_list = prime_indicator;
-
-    if (atoi(argv[1])%2 == 0) {
-        args2->length = ((atoi(argv[1])-1)/2);
-    }
-    else {
-        args2->length = ((atoi(argv[1])-1)/2) - 1;
-    }
-    args2->range = list2;
-    args2->prime_list = prime_indicator;
-    
-    // 1. Create threads
-    // Args: (thread_id, attributes, routine_function, function_arguments)
-    if (pthread_create(&thread1, NULL, calculate_prime, (void*) args1) != 0) {
-        perror("Failed to create thread 1");
-        free(args1);
-        return 1;
-    }
-    
-    if (pthread_create(&thread2, NULL, calculate_prime, (void*) args2) != 0) {
-        perror("Failed to create thread 2");
-        free(args2);
-        return 1;
-    }
-
-    // 2. Wait for threads to finish execution
-    pthread_join(thread1, NULL);
-    pthread_join(thread2, NULL);
-
-    for (int i=2; i<atoi(argv[1]); i++) {
-        if (prime_indicator[i-1] == 1) {
-            if (atoi(argv[1]) <= 100) {
+    for (int i = 2; i < number; i++) {
+        if (prime_indicator[i]) {
+            if (number <= 100) {
                 printf("%d\n", i);
-            } 
-            else {
+            } else {
                 fprintf(fp, "%d\n", i);
             }
         }
     }
 
+    if (clock_gettime(CLOCK_MONOTONIC, &end_time) != 0) {
+        perror("Failed to stop the timer");
+        free(prime_indicator);
+        fclose(fp);
+        return EXIT_FAILURE;
+    }
 
-    clock_gettime(CLOCK_MONOTONIC, &end);
-
-    double cpu_time_used = (end.tv_sec - start.tv_sec) +
-                 (end.tv_nsec - start.tv_nsec) / 1e9;
+    double cpu_time_used = (double)(end_time.tv_sec - start_time.tv_sec) +
+                          (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
 
     printf("CPU time used: %f seconds\n", cpu_time_used);
 
-    free(list1);
-    free(list2);
-    // free(args1);
-    // free(args2);
     free(prime_indicator);
-
-    return 0;
+    fclose(fp);
+    return EXIT_SUCCESS;
 }

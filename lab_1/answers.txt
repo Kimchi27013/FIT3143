@@ -6,13 +6,13 @@ n = 100000000 CPU time used: 100.087765 seconds
 n = 200000000 CPU time used: 312.151968 seconds
 
 POSIX threads:
-n = 10000000 CPU time used: 4.362367 seconds
-n = 100000000 CPU time used: 102.208774 seconds
-n = 200000000 CPU time used: 341.734605 seconds
+n = 10000000 CPU time used: 8.828757 seconds
+n = 100000000 CPU time used: 96.629249 seconds
+n = 200000000 CPU time used: 224.701286 seconds
 
 OpenMP:
-n = 10000000 CPU time used: 8.572179 seconds
-n = 100000000 CPU time used: 199.914347 seconds
+n = 10000000 CPU time used: 6.122652 seconds
+n = 100000000 CPU time used: 36.395124 seconds
 n = 200000000 CPU time used: 86.364117 seconds
 
 
