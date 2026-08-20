@@ -22,12 +22,8 @@ them and constructs the sorted output serially.
 struct shared_work {
     int n;
     int next_candidate;
-    int start_ready;
-    int cancel;
     unsigned char *is_prime;
     pthread_mutex_t work_mutex;
-    pthread_mutex_t start_mutex;
-    pthread_cond_t start_condition;
 };
 
 static int append_number(char **buffer, size_t *length, size_t *capacity,
@@ -74,18 +70,6 @@ static int append_number(char **buffer, size_t *length, size_t *capacity,
 static void *worker(void *argument)
 {
     struct shared_work *work = argument;
-
-    /* Do not begin until main confirms that every worker was created. */
-    pthread_mutex_lock(&work->start_mutex);
-    while (!work->start_ready) {
-        pthread_cond_wait(&work->start_condition, &work->start_mutex);
-    }
-    int cancel = work->cancel;
-    pthread_mutex_unlock(&work->start_mutex);
-
-    if (cancel) {
-        return NULL;
-    }
 
     /* Dynamic scheduling: claim 64 odd candidates at a time. */
     for (;;) {
@@ -160,15 +144,11 @@ int main(int argc, char *argv[])
     struct shared_work work = {
         .n = n,
         .next_candidate = 3,
-        .start_ready = 0,
-        .cancel = 0,
         .is_prime = is_prime
     };
 
-    if (pthread_mutex_init(&work.work_mutex, NULL) != 0 ||
-        pthread_mutex_init(&work.start_mutex, NULL) != 0 ||
-        pthread_cond_init(&work.start_condition, NULL) != 0) {
-        fprintf(stderr, "Error initialising POSIX synchronisation.\n");
+    if (pthread_mutex_init(&work.work_mutex, NULL) != 0) {
+        fprintf(stderr, "Error initialising the work mutex.\n");
         free(is_prime);
         free(threads);
         return EXIT_FAILURE;
@@ -186,12 +166,6 @@ int main(int argc, char *argv[])
         created_threads++;
     }
 
-    pthread_mutex_lock(&work.start_mutex);
-    work.cancel = created_threads != nthreads;
-    work.start_ready = 1;
-    pthread_cond_broadcast(&work.start_condition);
-    pthread_mutex_unlock(&work.start_mutex);
-
     int join_error = 0;
     for (int thread = 0; thread < created_threads; thread++) {
         int error = pthread_join(threads[thread], NULL);
@@ -202,8 +176,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    pthread_cond_destroy(&work.start_condition);
-    pthread_mutex_destroy(&work.start_mutex);
     pthread_mutex_destroy(&work.work_mutex);
 
     if (created_threads != nthreads || join_error) {
