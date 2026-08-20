@@ -30,10 +30,6 @@ struct shared_work {
     pthread_cond_t start_condition;
 };
 
-struct thread_args {
-    struct shared_work *work;
-};
-
 static int append_number(char **buffer, size_t *length, size_t *capacity,
                          int number)
 {
@@ -77,8 +73,7 @@ static int append_number(char **buffer, size_t *length, size_t *capacity,
 
 static void *worker(void *argument)
 {
-    struct thread_args *thread = argument;
-    struct shared_work *work = thread->work;
+    struct shared_work *work = argument;
 
     /* Do not begin until main confirms that every worker was created. */
     pthread_mutex_lock(&work->start_mutex);
@@ -150,14 +145,11 @@ int main(int argc, char *argv[])
 
     unsigned char *is_prime = calloc((size_t)n, sizeof(*is_prime));
     pthread_t *threads = malloc((size_t)nthreads * sizeof(*threads));
-    struct thread_args *arguments =
-        calloc((size_t)nthreads, sizeof(*arguments));
 
-    if (is_prime == NULL || threads == NULL || arguments == NULL) {
+    if (is_prime == NULL || threads == NULL) {
         fprintf(stderr, "Error allocating benchmark data.\n");
         free(is_prime);
         free(threads);
-        free(arguments);
         return EXIT_FAILURE;
     }
 
@@ -179,16 +171,12 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error initialising POSIX synchronisation.\n");
         free(is_prime);
         free(threads);
-        free(arguments);
         return EXIT_FAILURE;
     }
 
     int created_threads = 0;
     for (int thread = 0; thread < nthreads; thread++) {
-        arguments[thread].work = &work;
-
-        int error = pthread_create(&threads[thread], NULL, worker,
-                                    &arguments[thread]);
+        int error = pthread_create(&threads[thread], NULL, worker, &work);
         if (error != 0) {
             fprintf(stderr,
                     "Failed to create thread %d (error %d).\n",
@@ -221,7 +209,6 @@ int main(int argc, char *argv[])
     if (created_threads != nthreads || join_error) {
         free(is_prime);
         free(threads);
-        free(arguments);
         return EXIT_FAILURE;
     }
 
@@ -233,7 +220,6 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error allocating the output buffer.\n");
         free(is_prime);
         free(threads);
-        free(arguments);
         return EXIT_FAILURE;
     }
 
@@ -245,7 +231,6 @@ int main(int argc, char *argv[])
             free(output_buffer);
             free(is_prime);
             free(threads);
-            free(arguments);
             return EXIT_FAILURE;
         }
     }
@@ -257,7 +242,6 @@ int main(int argc, char *argv[])
             free(output_buffer);
             free(is_prime);
             free(threads);
-            free(arguments);
             return EXIT_FAILURE;
         }
 
@@ -269,7 +253,6 @@ int main(int argc, char *argv[])
             free(output_buffer);
             free(is_prime);
             free(threads);
-            free(arguments);
             return EXIT_FAILURE;
         }
         fclose(output);
@@ -282,7 +265,6 @@ int main(int argc, char *argv[])
         free(output_buffer);
         free(is_prime);
         free(threads);
-        free(arguments);
         return EXIT_FAILURE;
     }
 
@@ -293,7 +275,6 @@ int main(int argc, char *argv[])
     free(output_buffer);
     free(is_prime);
     free(threads);
-    free(arguments);
 
     return EXIT_SUCCESS;
 }
