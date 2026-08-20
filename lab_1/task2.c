@@ -126,13 +126,6 @@ static void *worker(void *argument)
     return NULL;
 }
 
-static double elapsed_seconds(const struct timespec *start,
-                              const struct timespec *end)
-{
-    return (double)(end->tv_sec - start->tv_sec) +
-           (end->tv_nsec - start->tv_nsec) / 1e9;
-}
-
 int main(int argc, char *argv[])
 {
     // Check for command-line argument
@@ -300,7 +293,8 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    double cpu_time_used = elapsed_seconds(&start_time, &end_time);
+    double cpu_time_used = (double)(end_time.tv_sec - start_time.tv_sec) +
+                           (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
     printf("CPU time used: %f seconds\n", cpu_time_used);
 
     free(output_buffer);
