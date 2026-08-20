@@ -38,12 +38,21 @@ int main(int argc, char *argv[])
     // Use file output for large values of n
     int writeToTxt = (n > 100) ? 1 : 0;
 
-    // Check every number from 2 up to n - 1
-    for (int i = 2; i < n; i++) {
+    // Handle 2 separately so the main loop only tests odd candidates
+    if (n > 2) {
+        if (writeToTxt) {
+            fprintf(fp, "2\n");
+        } else {
+            printf("2\n");
+        }
+    }
+
+    // All even numbers greater than 2 are composite
+    for (int i = 3; i < n; i += 2) {
         int prime = 1;
 
-        // Check if i has any divisors
-        for (int j = 2; j*j < i; j++) {
+        // Only odd divisors up to the square root need to be checked
+        for (int j = 3; j <= i / j; j += 2) {
             if (i % j == 0) {
                 prime = 0;
                 break;
