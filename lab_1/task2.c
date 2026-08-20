@@ -253,19 +253,12 @@ int main(int argc, char *argv[])
     if (write_to_file) {
         FILE *output = fopen(filename, "w");
         if (output == NULL) {
-            /* Retry transient failures from cloud-backed drives. */
-            for (int attempt = 0; attempt < 5 && output == NULL;
-                    attempt++) {
-                output = fopen(filename, "w");
-            }
-            if (output == NULL) {
-                perror("Error opening output file");
-                free(output_buffer);
-                free(is_prime);
-                free(threads);
-                free(arguments);
-                return EXIT_FAILURE;
-            }
+            perror("Error opening output file");
+            free(output_buffer);
+            free(is_prime);
+            free(threads);
+            free(arguments);
+            return EXIT_FAILURE;
         }
 
         size_t bytes_written =
