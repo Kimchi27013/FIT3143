@@ -1,12 +1,16 @@
 /*
 Task 1 – Serial Code - Finding Prime Numbers
-Write a serial C program to search for prime numbers that are strictly less than an integer n,
-provided by the user. The program will output a sorted list of all prime numbers found.
-Example: For instance, if the user inputs n as 10 on the terminal, the prime numbers being
-printed are: 2, 3, 5, 7 (sorted in ascending order).
-Your program is required to have the capability to print the sorted list of prime numbers to:
-a) the standard output (for small n values, e.g., n < 100), and
-b) a text file (for larger n values, e.g., n > 100).
+
+Write a serial C program to search for prime numbers that are strictly less
+than an integer n, provided by the user. The program will output a sorted
+list of all prime numbers found.
+
+Function parameters:
+  - argc: Number of command-line arguments passed to the program.
+    The program expects one argument in addition to the program name:
+    the maximum number n to search for prime numbers.
+  - argv: Array containing the command-line arguments.
+    argv[0] is the program name, while argv[1] contains the value of n.
 */
 
 #include <stdio.h>

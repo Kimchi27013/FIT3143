@@ -4,12 +4,17 @@ Parallelizes both the primality test AND the output-buffer construction
 to minimize serial (non-parallelizable) overhead, improving speedup
 scaling per Amdahl's Law.
 
-Improvements over baseline:
-  - dynamic scheduling to fix load imbalance 
-  - output buffer built in PARALLEL: each thread fills its own local buffer,
-    then buffers are concatenated with fast memcpy (no serial string loop)
-  - skips even numbers and only checks up to sqrt(i)
-  - single fwrite instead of per-line fprintf/printf
+Function parameters:
+  - argc: Number of command-line arguments passed to the program.
+    The program requires at least one argument in addition to the
+    program name: the maximum number to search for primes.
+  - argv: Array containing the command-line arguments.
+    argv[0] is the program name, while argv[1] contains the maximum
+    number (n) used by the program.
+
+AI Declaration:
+  - AI was used to generate ideas of improvements, and to debug the code
+    when needed.
 */
 
 #include <stdio.h>
@@ -48,7 +53,7 @@ int main(int argc, char *argv[])
 
     if (n > 2) is_prime[2] = 1;
 
-    // Key Improvement 1 - Dyanmic Scheduling
+    // Key Improvement 1 - Dynamic Scheduling
     // schedule(dynamic, 64) fixes load imbalance from using static scheduler
     #pragma omp parallel for schedule(dynamic, 64)
     for (int i = 3; i < n; i += 2) { // Key Improvement 2 - Only checking even values greater than 2

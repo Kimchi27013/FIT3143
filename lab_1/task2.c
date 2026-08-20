@@ -4,6 +4,27 @@ Parallel prime-number search using POSIX threads.
 The program finds all prime numbers strictly less than the positive integer
 given on the command line. Results are printed to standard output when
 n <= 100 and written to prime-out-posix.txt otherwise.
+
+Function parameters:
+  - argc: Number of command-line arguments passed to the program.
+    The program requires exactly one argument in addition to the program
+    name: the maximum number to search for primes.
+  - argv: Array containing the command-line arguments.
+    argv[0] is the program name and argv[1] contains the maximum number
+    to search for primes.
+
+Thread function parameters:
+  - calculate_prime(void *arg): Receives a pointer to a thread_args
+    structure containing the start and end values of the range assigned
+    to the thread, as well as the shared prime indicator array.
+  - thread_args.start: First number in the range assigned to the thread.
+  - thread_args.end: End of the range assigned to the thread (exclusive).
+  - thread_args.prime_list: Pointer to the shared array used to store
+    whether each number is prime.
+
+AI Declaration:
+  - AI was used to generate ideas of improvements, and to debug the code
+    when needed.
 */
 
 #include <errno.h>

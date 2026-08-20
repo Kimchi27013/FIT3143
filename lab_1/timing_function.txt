@@ -1,0 +1,13 @@
+**/
+    Function used to automatically collect runtimes for different values of n, and then automatically write them to an output file.
+    NOTE: This function was generated with AI.
+*/
+
+"n,time_seconds" | Out-File -FilePath timing_log.csv -Encoding utf8
+PS C:\Users\gluon\FIT3143\lab_1> for ($n = 10000000; $n -le 200000000; $n += 5000000) {
+>>     $output = ./task3.exe $n
+>>     $timeStr = ($output | Select-String "CPU time used: (\[\\d.]+)").Matches.Groups\[1].Value
+>>     $time = \[double]$timeStr                                                   
+>>     "$n,$time" | Out-File -FilePath timing\_log\_task3.csv -Append -Encoding utf8
+>>     Write-Host "n: $n | Time: $time s"
+>> }                      
