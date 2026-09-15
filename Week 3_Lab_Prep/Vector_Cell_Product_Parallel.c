@@ -29,7 +29,7 @@ int main()
 	struct timespec start, end, startComp, endComp; 
 	double time_taken; 
 
-	pthread_t tid[NUM_THREADS];
+	pthread_t threadId[NUM_THREADS];
 	int threadNum[NUM_THREADS];
 
     	// Get current clock time.
@@ -79,13 +79,13 @@ int main()
 	for (i = 0; i < NUM_THREADS; i++)
 	{
 	    	threadNum[i] = i;
-		pthread_create(&tid[i], 0, ThreadFunc, &threadNum[i]);
+		pthread_create(&threadId[i], 0, ThreadFunc, &threadNum[i]);
 	}
 	
 	// Join
 	for(i = 0; i < NUM_THREADS; i++)
 	{
-	    	pthread_join(tid[i], NULL);
+	    	pthread_join(threadId[i], NULL);
 	}
 
 

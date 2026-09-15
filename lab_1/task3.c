@@ -65,7 +65,7 @@ int main(int argc, char *argv[])
                 break;
             }
         }
-        is_prime[i] = (char)prime;
+        is_prime[i] = (char)prime; // Use char to save memory (1 byte instead of 4)
     }
 
     // Key Improvement 3 - Thread-Local Buffers

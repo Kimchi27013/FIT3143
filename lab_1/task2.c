@@ -1,6 +1,6 @@
-/*
-Parallel prime-number search using POSIX threads.
+#define _POSIX_C_SOURCE 200809L
 
+<<<<<<< HEAD
 The program finds all prime numbers strictly less than the positive integer
 given on the command line. Results are printed to standard output when
 n <= 100 and written to prime-out-posix.txt otherwise.
@@ -25,39 +25,108 @@ Thread function parameters:
 AI Declaration:
   - AI was used to generate ideas of improvements, and to debug the code
     when needed.
+=======
+/*
+Task 2 (POSIX threads version) - Finding Prime Numbers in Parallel
+
+Worker threads dynamically claim chunks of odd candidates, test them, and
+update a shared primality array. After every worker terminates, main joins
+them and constructs the sorted output serially.
+>>>>>>> f7accf24811e70c7985dbaae5d1247b97a9e3cc5
 */
 
-#include <errno.h>
-#include <limits.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <unistd.h>
 
-#define NUM_THREADS 12
+#define PRIME_CHUNK_SIZE 64
+#define INITIAL_BUFFER_CAPACITY 4096
 
-struct thread_args {
-    int start;
-    int end;
-    unsigned char *prime_list;
+struct shared_work {
+    int n;
+    int next_candidate;
+    unsigned char *is_prime;
+    pthread_mutex_t work_mutex;
 };
 
-static void *calculate_prime(void *arg)
+static int append_number(char **buffer, size_t *length, size_t *capacity,
+                         int number)
 {
-    struct thread_args *data = arg;
+    char text[32];
+    int written = snprintf(text, sizeof(text), "%d\n", number);
 
-    for (int p = data->start; p < data->end; p++) {
-        int prime = 1;
+    if (written < 0) {
+        return -1;
+    }
 
-        /* Using p / j avoids overflow from calculating j * j. */
-        for (int j = 2; j <= p / j; j++) {
-            if (p % j == 0) {
-                prime = 0;
+    size_t text_length = (size_t)written;
+    if (text_length > SIZE_MAX - *length) {
+        return -1;
+    }
+
+    size_t required = *length + text_length;
+    if (required > *capacity) {
+        size_t new_capacity = *capacity;
+
+        while (new_capacity < required) {
+            if (new_capacity > SIZE_MAX / 2) {
+                new_capacity = required;
                 break;
             }
+            new_capacity *= 2;
         }
 
-        data->prime_list[p] = (unsigned char)prime;
+        char *resized = realloc(*buffer, new_capacity);
+        if (resized == NULL) {
+            return -1;
+        }
+
+        *buffer = resized;
+        *capacity = new_capacity;
+    }
+
+    memcpy(*buffer + *length, text, text_length);
+    *length = required;
+    return 0;
+}
+
+static void *worker(void *argument)
+{
+    struct shared_work *work = argument;
+
+    /* Dynamic scheduling: claim 64 odd candidates at a time. */
+    for (;;) {
+        pthread_mutex_lock(&work->work_mutex);
+        int first = work->next_candidate;
+        work->next_candidate += 2 * PRIME_CHUNK_SIZE;
+        pthread_mutex_unlock(&work->work_mutex);
+
+        if (first >= work->n) {
+            break;
+        }
+
+        int end = first + 2 * PRIME_CHUNK_SIZE;
+        if (end > work->n) {
+            end = work->n;
+        }
+
+        for (int candidate = first; candidate < end; candidate += 2) {
+            int prime = 1;
+
+            for (int divisor = 3; divisor <= candidate / divisor;
+                 divisor += 2) {
+                if (candidate % divisor == 0) {
+                    prime = 0;
+                    break;
+                }
+            }
+
+            work->is_prime[candidate] = (unsigned char)prime;
+        }
     }
 
     return NULL;
@@ -65,116 +134,146 @@ static void *calculate_prime(void *arg)
 
 int main(int argc, char *argv[])
 {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s max_number\n", argv[0]);
-        return EXIT_FAILURE;
+    // Check for command-line argument
+    if (argc < 2) {
+        printf("Error: Please provide at least one argument.\n");
+        printf("Usage: %s max_number\n", argv[0]);
+        return 1;
     }
 
-    errno = 0;
-    char *end_pointer = NULL;
-    long input = strtol(argv[1], &end_pointer, 10);
-
-    if (errno != 0 || end_pointer == argv[1] || *end_pointer != '\0' ||
-        input < 2 || input > INT_MAX) {
-        fprintf(stderr, "Error: max_number must be an integer from 2 to %d.\n",
-                INT_MAX);
-        return EXIT_FAILURE;
-    }
-
-    int number = (int)input;
     const char *filename = "prime-out-posix.txt";
-    FILE *fp = fopen(filename, "w");
 
-    if (fp == NULL) {
-        perror("Error opening output file");
-        return EXIT_FAILURE;
-    }
-
-    unsigned char *prime_indicator = calloc((size_t)number,
-                                             sizeof(*prime_indicator));
-    if (prime_indicator == NULL) {
-        perror("Failed to allocate the prime array");
-        fclose(fp);
-        return EXIT_FAILURE;
-    }
-
+    int nthreads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    int n = atoi(argv[1]);
+    int write_to_file = n > 100;
     struct timespec start_time;
     struct timespec end_time;
 
     if (clock_gettime(CLOCK_MONOTONIC, &start_time) != 0) {
         perror("Failed to start the timer");
-        free(prime_indicator);
-        fclose(fp);
         return EXIT_FAILURE;
     }
 
-    int candidate_count = number - 2;
-    int thread_count = candidate_count < NUM_THREADS
-                           ? candidate_count
-                           : NUM_THREADS;
-    pthread_t threads[NUM_THREADS];
-    struct thread_args arguments[NUM_THREADS];
+    unsigned char *is_prime = calloc((size_t)n, sizeof(*is_prime));
+    pthread_t *threads = malloc((size_t)nthreads * sizeof(*threads));
+
+    if (is_prime == NULL || threads == NULL) {
+        fprintf(stderr, "Error allocating benchmark data.\n");
+        free(is_prime);
+        free(threads);
+        return EXIT_FAILURE;
+    }
+
+    if (n > 2) {
+        is_prime[2] = 1;
+    }
+
+    struct shared_work work = {
+        .n = n,
+        .next_candidate = 3,
+        .is_prime = is_prime
+    };
+
+    if (pthread_mutex_init(&work.work_mutex, NULL) != 0) {
+        fprintf(stderr, "Error initialising the work mutex.\n");
+        free(is_prime);
+        free(threads);
+        return EXIT_FAILURE;
+    }
+
     int created_threads = 0;
-
-    for (int i = 0; i < thread_count; i++) {
-        /* These boundaries cover [2, number) exactly once. */
-        arguments[i].start =
-            2 + (int)((long long)i * candidate_count / thread_count);
-        arguments[i].end =
-            2 + (int)((long long)(i + 1) * candidate_count / thread_count);
-        arguments[i].prime_list = prime_indicator;
-
-        int error = pthread_create(&threads[i], NULL, calculate_prime,
-                                   &arguments[i]);
+    for (int thread = 0; thread < nthreads; thread++) {
+        int error = pthread_create(&threads[thread], NULL, worker, &work);
         if (error != 0) {
-            fprintf(stderr, "Failed to create thread %d (error %d).\n", i,
-                    error);
+            fprintf(stderr,
+                    "Failed to create thread %d (error %d).\n",
+                    thread, error);
             break;
         }
-
         created_threads++;
     }
 
-    for (int i = 0; i < created_threads; i++) {
-        int error = pthread_join(threads[i], NULL);
+    int join_error = 0;
+    for (int thread = 0; thread < created_threads; thread++) {
+        int error = pthread_join(threads[thread], NULL);
         if (error != 0) {
-            fprintf(stderr, "Failed to join thread %d (error %d).\n", i,
-                    error);
-            free(prime_indicator);
-            fclose(fp);
+            fprintf(stderr, "Failed to join thread %d (error %d).\n",
+                    thread, error);
+            join_error = 1;
+        }
+    }
+
+    pthread_mutex_destroy(&work.work_mutex);
+
+    if (created_threads != nthreads || join_error) {
+        free(is_prime);
+        free(threads);
+        return EXIT_FAILURE;
+    }
+
+    /* Joining guarantees that every is_prime update is complete. */
+    size_t output_capacity = INITIAL_BUFFER_CAPACITY;
+    size_t total_length = 0;
+    char *output_buffer = malloc(output_capacity);
+    if (output_buffer == NULL) {
+        fprintf(stderr, "Error allocating the output buffer.\n");
+        free(is_prime);
+        free(threads);
+        return EXIT_FAILURE;
+    }
+
+    for (int candidate = 2; candidate < n; candidate++) {
+        if (is_prime[candidate] &&
+            append_number(&output_buffer, &total_length,
+                            &output_capacity, candidate) != 0) {
+            fprintf(stderr, "Error constructing the output buffer.\n");
+            free(output_buffer);
+            free(is_prime);
+            free(threads);
             return EXIT_FAILURE;
         }
     }
 
-    if (created_threads != thread_count) {
-        free(prime_indicator);
-        fclose(fp);
-        return EXIT_FAILURE;
-    }
-
-    for (int i = 2; i < number; i++) {
-        if (prime_indicator[i]) {
-            if (number <= 100) {
-                printf("%d\n", i);
-            } else {
-                fprintf(fp, "%d\n", i);
-            }
+    if (write_to_file) {
+        FILE *output = fopen(filename, "w");
+        if (output == NULL) {
+            perror("Error opening output file");
+            free(output_buffer);
+            free(is_prime);
+            free(threads);
+            return EXIT_FAILURE;
         }
+
+        size_t bytes_written =
+            fwrite(output_buffer, 1, total_length, output);
+        if (bytes_written != total_length) {
+            fprintf(stderr, "Error writing the output file.\n");
+            fclose(output);
+            free(output_buffer);
+            free(is_prime);
+            free(threads);
+            return EXIT_FAILURE;
+        }
+        fclose(output);
+    } else {
+        fwrite(output_buffer, 1, total_length, stdout);
     }
 
     if (clock_gettime(CLOCK_MONOTONIC, &end_time) != 0) {
         perror("Failed to stop the timer");
-        free(prime_indicator);
-        fclose(fp);
+        free(output_buffer);
+        free(is_prime);
+        free(threads);
         return EXIT_FAILURE;
     }
 
     double cpu_time_used = (double)(end_time.tv_sec - start_time.tv_sec) +
-                          (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
-
+                           (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
     printf("CPU time used: %f seconds\n", cpu_time_used);
 
-    free(prime_indicator);
-    fclose(fp);
+    free(output_buffer);
+    free(is_prime);
+    free(threads);
+
     return EXIT_SUCCESS;
 }
