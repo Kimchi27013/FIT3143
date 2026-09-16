@@ -1,59 +1,14 @@
 /*
-Task 1 (parallel) - Finding Prime Numbers with MPI
-
-The range [2, n) is cut into many small blocks and the blocks are
-handed out round-robin ("block-cyclic") across ranks: rank r owns
-blocks r, r+size, r+2*size, ... Each rank tests every number inside
-its own blocks and keeps the local primes it finds. Rank 0 gathers
-everyone's results, sorts them, and prints/writes the final list.
-
-Why block-cyclic instead of one contiguous block per rank?
-Trial-division cost grows with sqrt(num), so numbers near n cost far
-more to test than numbers near 2. Handing each rank one contiguous
-slice therefore gives the highest-numbered rank most of the real
-work even though every rank gets the same *count* of numbers -- that
-rank becomes the bottleneck and caps the achievable speedup.
-Scattering many small blocks round-robin across the whole range
-mixes cheap (small) and expensive (large) numbers into every rank's
-share, so total *work*, not just element count, is balanced.
-
-Why *block*-cyclic and not plain element-by-element cyclic
-(i.e. "rank r tests 2+r, 2+r+size, 2+r+2*size, ...")?
-is_prime() below uses the standard 6k+-1 wheel: after ruling out
-multiples of 2 and 3 with one cheap check, it only needs to fully
-trial-divide candidates congruent to 1 or 5 (mod 6) -- primes can
-only be of that form. If the stride between a rank's numbers (i.e.
-`size`, the process count) shares a factor with 6, that rank keeps
-landing on the *same* residue class mod 6 forever: some ranks would
-then get nothing but expensive candidates and others nothing but
-instant composite rejects, which is arguably worse than the original
-contiguous-block imbalance (measured: with np=6, raw element-cyclic
-striping left two ranks doing ~500x more work than the rest, because
-6 % 6 == 0). Using contiguous blocks that are much larger than 6
-avoids this resonance entirely, since every block naturally contains
-a representative mix of residues mod 6, while still scattering blocks
-across the full [2, n) range for the coarse-grained balance described
-above.
-
-The trade-off: numbers within one rank's blocks are still increasing,
-but blocks from different ranks are interleaved, so the concatenated
-gathered array is not sorted end-to-end -- an explicit sort at rank 0
-is required (cheap relative to the parallel testing phase it follows).
+Task 1 (parallel) - Finding Prime Numbers with MPI (Instrumented)
 
 Compile:  mpicc -O2 -o task1 task1.c
-Run:      mpirun -np 4 ./task1 1000000
+Run:      mpirun -np 4 ./task1 100000000
 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <mpi.h>
 
-// 6k +/- 1 trial division: once multiples of 2 and 3 are removed,
-// every remaining prime candidate has the form 6k+1 or 6k+5, so only
-// those divisors need to be tested. This roughly halves the number
-// of candidate divisors compared to "skip only even numbers", and
-// comparing j*j <= num (integer multiply) instead of num/j (integer
-// divide) avoids a division on every loop iteration.
 static inline int is_prime(int num)
 {
     if (num < 2) return 0;
@@ -73,10 +28,6 @@ static int cmp_int(const void *a, const void *b)
     return (ia > ib) - (ia < ib);
 }
 
-// Target number of blocks per rank. Higher = finer-grained balancing
-// (better averages out the sqrt(num) cost gradient) at the cost of a
-// little extra loop overhead. 32 is a good default for n in the
-// millions-to-billions range typical of this kind of assignment.
 #define BLOCKS_PER_RANK 32
 
 int main(int argc, char *argv[])
@@ -86,32 +37,42 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    if (argc < 2) {
-        if (rank == 0) {
+    /* SERIAL INITIALIZATION */
+    double t_init_start = MPI_Wtime();
+    
+    int n = 0;
+    if (rank == 0) {
+        if (argc < 2) {
             printf("Error: Please provide at least one argument.\n");
             printf("Usage: mpirun -np <procs> %s max_number\n", argv[0]);
+            n = -1; // Error flag
+        } else {
+            n = atoi(argv[1]);
         }
+    }
+    
+    // Broadcast n to all processes (creates measurable communication overhead)
+    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (n < 2) {
         MPI_Finalize();
         return 1;
     }
+    
+    double t_init_end = MPI_Wtime();
 
-    int n = atoi(argv[1]);
-    MPI_Barrier(MPI_COMM_WORLD);
-    double start = MPI_Wtime();
+    /* PARALLEL COMPONENT */
+    double t_compute_start = MPI_Wtime();
 
     int range = (n > 2) ? (n - 2) : 0;
     int block_size = range / (size * BLOCKS_PER_RANK);
     if (block_size < 1) block_size = 1;
-    int num_blocks = (range + block_size - 1) / block_size; // ceil
+    int num_blocks = (range + block_size - 1) / block_size;
 
-    // Growable buffer: with block-cyclic scheduling the exact count a
-    // rank will find isn't known in advance, so grow on demand instead
-    // of trying to pre-compute a tight capacity.
     int local_capacity = 1024;
     int *local_primes = malloc(local_capacity * sizeof(int));
     int local_prime_count = 0;
 
-    // Rank r owns blocks r, r+size, r+2*size, ... (block-cyclic).
     for (int b = rank; b < num_blocks; b += size) {
         int block_start = 2 + b * block_size;
         int block_end = block_start + block_size;
@@ -128,7 +89,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Gather how many primes each rank found, then gather the values
+    double t_compute_end = MPI_Wtime();
+
+    /* SERIAL GATHER, SORT AND WRITE */
+    double t_comm_start = MPI_Wtime();
+
     int *recv_counts = NULL;
     int *displs = NULL;
     if (rank == 0) {
@@ -153,18 +118,12 @@ int main(int argc, char *argv[])
                 all_primes, recv_counts, displs, MPI_INT,
                 0, MPI_COMM_WORLD);
 
-    // Each rank's own numbers are increasing, but blocks from
-    // different ranks are interleaved across the gathered array, so
-    // it needs an explicit sort before it is valid sorted output.
     if (rank == 0 && total_primes > 1) {
         qsort(all_primes, total_primes, sizeof(int), cmp_int);
     }
 
-    double end = MPI_Wtime();
-
     if (rank == 0) {
         int write_to_file = (n > 100) ? 1 : 0;
-
         if (write_to_file) {
             const char *filename = "prime-openmpi.txt";
             FILE *fp = fopen(filename, "w");
@@ -175,22 +134,49 @@ int main(int argc, char *argv[])
                     fprintf(fp, "%d\n", all_primes[i]);
                 }
                 fclose(fp);
-                printf("Wrote %d primes to %s\n", total_primes, filename);
-            }
-        } else {
-            for (int i = 0; i < total_primes; i++) {
-                printf("%d\n", all_primes[i]);
             }
         }
-
-        printf("Wall clock time used: %f seconds (np=%d)\n", end - start, size);
-
         free(all_primes);
         free(recv_counts);
         free(displs);
     }
-
     free(local_primes);
+
+    double t_comm_end = MPI_Wtime();
+
+    /*  CODE FOR THE TIMING ANALYSIS
+        NOTE: This part was written using AI
+    */
+    double local_init_time = t_init_end - t_init_start;
+    double local_compute_time = t_compute_end - t_compute_start;
+    double local_comm_time = t_comm_end - t_comm_start;
+
+    double max_init, max_compute, max_comm;
+    
+    // We use MPI_MAX to find the slowest process in each phase,
+    // which represents the true "wall-clock" limit.
+    MPI_Reduce(&local_init_time, &max_init, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_compute_time, &max_compute, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_comm_time, &max_comm, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        double total_serial = max_init + max_comm;
+        double total_time = total_serial + max_compute;
+        
+        printf("\n--- Profiling Results (np=%d, n=%d) ---\n", size, n);
+        printf("T_serial_init : %f s\n", max_init);
+        printf("T_parallel    : %f s\n", max_compute);
+        printf("T_serial_comm : %f s\n", max_comm);
+        printf("--------------------------------------\n");
+        printf("Total Serial (T_s)  : %f s\n", total_serial);
+        printf("Total Parallel (T_p): %f s\n", max_compute);
+        printf("Total Execution     : %f s\n", total_time);
+        
+        // These are the exact fractions you need for Amdahl's/Gustafson's Laws!
+        printf("Serial Fraction (f) : %f\n", total_serial / total_time);
+        printf("Parallel Fraction   : %f\n", max_compute / total_time);
+    }
+
     MPI_Finalize();
     return 0;
 }
