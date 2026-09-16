@@ -1,269 +1,287 @@
 /*
-Task 2 (Hybrid MPI + OpenMP version) - Finding Prime Numbers in Parallel
-Combines distributed-memory parallelism (MPI, across processes/nodes) with
-shared-memory parallelism (OpenMP, across threads within a process).
+Task 2 (Hybrid MPI + OpenMP version) - Finding Prime Numbers with MPI+OpenMP (Instrumented)
+
+Same is_prime() and round-robin block assignment as task1 — the only addition
+here is parallelizing each rank's block loop across OpenMP threads.
 
 Compile:  mpicc -O2 -fopenmp -o task2 task2.c -lm
-Run:      mpirun -np 1 ./task2 100000000 1
+Run:      mpirun -np 4 ./task2 100000000 4
+          (second arg = threads per process, optional)
 */
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <math.h>
 #include <mpi.h>
+#include <math.h>
 #include <omp.h>
 
-/* ---- fast integer-to-string (replaces extremely slow snprintf) ---- */
-// AI Declaration - This was written by AI
-static inline int fast_itoa(int val, char* buf) {
-    char temp[12];
-    int len = 0;
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\n';
-        return 2;
-    }
-    while (val > 0) {
-        temp[len++] = (char)('0' + (val % 10));
-        val /= 10;
-    }
-    for (int i = 0; i < len; i++) {
-        buf[i] = temp[len - 1 - i];
-    }
-    buf[len] = '\n';
-    return len + 1;
-}
-
-/* ---- small-prime sieve, used to speed up trial division ---- */
-// AI Declaration - This was written by AI
-static int *sieve_small_primes(int limit, int *count_out)
+/*
+Primality function
+Checks divisors of the form 6k+1 and up to sqrt(num) as all primes above three are of this format
+*/
+static inline int is_prime(int num)
 {
-    if (limit < 2) { *count_out = 0; return NULL; }
+    if (num < 2) return 0;
+    if (num == 2 || num == 3) return 1;
+    if (num % 2 == 0 || num % 3 == 0) return 0;
 
-    char *composite = calloc((size_t)limit + 1, sizeof(char));
-    int *primes = malloc(((size_t)limit / 2 + 2) * sizeof(int));
-    int count = 0;
-
-    for (int i = 2; i <= limit; i++) {
-        if (!composite[i]) {
-            primes[count++] = i;
-            for (long j = (long)i * i; j <= limit; j += i) composite[j] = 1;
-        }
+    for (int divisor = 5; (long long)divisor * divisor <= num; divisor += 6) {
+        if (num % divisor == 0 || num % (divisor + 2) == 0) return 0;
     }
-    free(composite);
-    *count_out = count;
-    return primes;
+    return 1;
 }
 
-/* ---- equal-WORK boundary table: x_k = n * (k/P)^(2/3) ---- */
-static void compute_boundaries(int n, int nprocs, int *boundaries)
+/*
+Utility function
+Casts pointers to integers and compares them 
+*NOTE: This function was written with AI
+*/
+static int compare_and_cast_int(const void *leftValue, const void *rightValue)
 {
-    boundaries[0] = 2; /* nothing useful below 2 */
-    for (int k = 1; k < nprocs; k++) {
-        double frac = (double)k / (double)nprocs;
-        int x = (int)(pow(frac, 2.0 / 3.0) * (double)n);
-        if (x < boundaries[k - 1]) x = boundaries[k - 1]; /* monotonic guard */
-        boundaries[k] = x;
-    }
-    boundaries[nprocs] = n;
+    int firstValue = *(const int *)leftValue;
+    int secondValue = *(const int *)rightValue;
+    return (firstValue > secondValue) - (firstValue < secondValue);
 }
+
+// Base block count per rank (task1's original value)
+#define BLOCKS_PER_RANK_BASE 32
 
 int main(int argc, char *argv[])
 {
-    int rank, nprocs;
+    int rankId, processCount;
     MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rankId);
+    MPI_Comm_size(MPI_COMM_WORLD, &processCount);
 
-    /* ==========================================================
-       PHASE 1: SERIAL INITIALIZATION (Setup & Dissemination)
-       ========================================================== */
-    double t_init_start = MPI_Wtime();
+    /* SERIAL INITIALIZATION */
+    double initStartTime = MPI_Wtime();
 
-    int n = 0;
-    int requested_threads = 0; 
-
-    if (rank == 0) {
+    int maxNumber = 0;
+    int requestedThreads = 0;
+    if (rankId == 0) {
         if (argc < 2) {
-            fprintf(stderr, "Usage: %s max_number [num_threads_per_process]\n", argv[0]);
-            n = -1; 
+            printf("Error: Please provide at least one argument.\n");
+            printf("Usage: mpirun -np <procs> %s max_number [threads_per_process]\n", argv[0]);
+            maxNumber = -1; // Error flag
         } else {
-            n = atoi(argv[1]);
-            if (argc >= 3) requested_threads = atoi(argv[2]);
+            maxNumber = atoi(argv[1]);
+            if (argc >= 3) requestedThreads = atoi(argv[2]);
         }
     }
 
-    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&requested_threads, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    // Broadcast n and the requested thread count to all processes
+    // (creates measurable communication overhead, same as task1)
+    MPI_Bcast(&maxNumber, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&requestedThreads, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    if (n < 2) {
-        if (rank == 0) fprintf(stderr, "Error: n must be >= 2.\n");
+    if (maxNumber < 2) {
         MPI_Finalize();
         return 1;
     }
 
-    if (requested_threads > 0) omp_set_num_threads(requested_threads);
-    int nthreads = omp_get_max_threads();
+    // Set OpenMP thread count per process if the user asked for a specific
+    // number, otherwise use OMP_NUM_THREADS
+    if (requestedThreads > 0) omp_set_num_threads(requestedThreads);
+    int threadCount = omp_get_max_threads();
 
-    double t_init_end = MPI_Wtime();
+    double initEndTime = MPI_Wtime();
 
-    /* ==========================================================
-       PHASE 2: PARALLEL COMPUTATION (MPI Domain + OpenMP Threads)
-       ========================================================== */
-    double t_compute_start = MPI_Wtime();
+    /* PARALLEL COMPONENT */
+    double computeStartTime = MPI_Wtime();
 
-    int *boundaries = malloc((nprocs + 1) * sizeof(int));
-    compute_boundaries(n, nprocs, boundaries);
-    int lo = boundaries[rank];
-    int hi = boundaries[rank + 1]; 
-    free(boundaries);
+    // Scale total block count by thread count too, not just rank count, so
+    // each rank has enough blocks (BLOCKS_PER_RANK_BASE per thread) to keep
+    // every OpenMP thread fed under dynamic scheduling. Without this, a rank
+    // with e.g. 4 threads but only ~32 blocks total gives threads too few
+    // chances to rebalance against each other.
+    // *NOTE: This was written with AI
+    int blocksPerRank = BLOCKS_PER_RANK_BASE * threadCount;
 
-    int local_n = hi - lo;
-    if (local_n < 0) local_n = 0;
+    int range = (maxNumber > 2) ? (maxNumber - 2) : 0;
+    int blockSize = range / (processCount * blocksPerRank);
+    if (blockSize < 1) blockSize = 1;
+    int numBlocks = (range + blockSize - 1) / blockSize;
 
-    int sqrt_n = (int)sqrt((double)n) + 1;
-    int small_count = 0;
-    int *small_primes = sieve_small_primes(sqrt_n, &small_count);
+    // Work out which blocks belong to this rank (round-robin, same as task1),
+    // so OpenMP threads below can be handed out chunks of THIS rank's blocks
+    int rankBlockCount = 0;
+    for (int blockIndex = rankId; blockIndex < numBlocks; blockIndex += processCount) rankBlockCount++;
 
-    char *is_prime = calloc((size_t)(local_n > 0 ? local_n : 1), sizeof(char));
-
-    if (lo <= 2 && 2 < hi) is_prime[2 - lo] = 1;
-
-    int odd_start = (lo % 2 == 0) ? lo + 1 : lo;
-    if (odd_start < 3) odd_start = 3;
-
-    #pragma omp parallel for schedule(dynamic, 64)
-    for (int i = odd_start; i < hi; i += 2) {
-        int prime = 1;
-        int limit = (int)sqrt((double)i);
-        
-        for (int p = 1; p < small_count; p++) {
-            int d = small_primes[p];
-            if (d > limit) break; 
-            if (i % d == 0) { prime = 0; break; }
-        }
-        is_prime[i - lo] = (char)prime;
+    int *rankBlocks = malloc((rankBlockCount > 0 ? rankBlockCount : 1) * sizeof(int));
+    {
+        int index = 0;
+        for (int blockIndex = rankId; blockIndex < numBlocks; blockIndex += processCount) rankBlocks[index++] = blockIndex;
     }
 
-    char **local_bufs = malloc((size_t)nthreads * sizeof(char *));
-    size_t *local_lens = calloc((size_t)nthreads, sizeof(size_t));
+    // Rough estimate of how many primes this rank will find, split evenly
+    // across threads, used to pre-size each thread's buffer up front and
+    // cut down on realloc() churn/contention during the parallel region.
+    // Prime counting function pi(x) ~ x / ln(x); we pad generously since
+    // it's only a starting guess, not a hard cap (buffers still grow via
+    // realloc if the estimate is too low).
+    // *NOTE: This was written with AI
+    double rangeHi = (double)((rankId + 1) * range) / (double)(numBlocks > 0 ? numBlocks : 1);
+    double approxLn = (rangeHi > 2.0) ? log(rangeHi) : 1.0;
+    int estRankPrimes = (int)((double)(rankBlockCount * blockSize) / approxLn) + 64;
+    int estThreadPrimes = (estRankPrimes / (threadCount > 0 ? threadCount : 1)) + 64;
+
+    // Each thread gets its own growable buffer of found primes, to avoid
+    // lock contention from multiple threads writing to one shared array
+    int **threadPrimes = malloc((size_t)threadCount * sizeof(int *));
+    int *threadCounts = calloc((size_t)threadCount, sizeof(int));
+    int *threadCaps = malloc((size_t)threadCount * sizeof(int));
 
     #pragma omp parallel
     {
-        int tid = omp_get_thread_num();
-        size_t max_items = (size_t)(local_n / nthreads) + 2; 
-        size_t cap = max_items * 12;
-        char *lbuf = malloc(cap);
-        size_t llen = 0;
+        int threadId = omp_get_thread_num();
+        int capacity = estThreadPrimes; // pre-sized estimate instead of a fixed 1024
+        int *buffer = malloc(capacity * sizeof(int));
+        int count = 0;
 
-        if (lbuf != NULL) {
-            #pragma omp for schedule(static)
-            for (int idx = 0; idx < local_n; idx++) {
-                if (is_prime[idx]) {
-                    llen += fast_itoa(lo + idx, lbuf + llen);
+        /* Blocks are assigned to ranks round-robin style for more even work distribution
+        EG. Rank 0 processes blocks 0,4,8... & Rank 1 processes 1,5,9... so that all ranks process both
+        larger and smaller primes, rather than processing only large or only small primes.
+        Within a rank, its blocks are further handed out to OpenMP threads dynamically
+        since dynamic scheduling lets idle threads pick up more blocks instead of sitting idle.
+        *NOTE: This section was modified with AI.
+        */
+        #pragma omp for schedule(dynamic, 1)
+        for (int index = 0; index < rankBlockCount; index++) {
+            int blockIndex = rankBlocks[index];
+            int blockStart = 2 + blockIndex * blockSize;
+            int blockEnd = blockStart + blockSize;
+            if (blockEnd > maxNumber) blockEnd = maxNumber;
+
+            for (int value = blockStart; value < blockEnd; value++) {
+                if (is_prime(value)) {
+                    if (count == capacity) {
+                        capacity *= 2;
+                        buffer = realloc(buffer, capacity * sizeof(int));
+                    }
+                    buffer[count++] = value;
                 }
             }
         }
-        local_bufs[tid] = lbuf;
-        local_lens[tid] = llen;
+
+        threadPrimes[threadId] = buffer;
+        threadCounts[threadId] = count;
+        threadCaps[threadId] = capacity;
     }
 
-    size_t proc_len = 0;
-    for (int t = 0; t < nthreads; t++) proc_len += local_lens[t];
+    // Merge all thread-private buffers into one array for this rank,
+    // same role as localPrimes in task1
+    int localPrimeCount = 0;
+    for (int threadIndex = 0; threadIndex < threadCount; threadIndex++) localPrimeCount += threadCounts[threadIndex];
 
-    char *proc_buf = malloc(proc_len > 0 ? proc_len : 1);
-    size_t off = 0;
-    for (int t = 0; t < nthreads; t++) {
-        if (local_bufs[t] != NULL) {
-            memcpy(proc_buf + off, local_bufs[t], local_lens[t]);
-            off += local_lens[t];
+    int *localPrimes = malloc((localPrimeCount > 0 ? localPrimeCount : 1) * sizeof(int));
+    {
+        int offset = 0;
+        for (int threadIndex = 0; threadIndex < threadCount; threadIndex++) {
+            for (int value = 0; value < threadCounts[threadIndex]; value++) {
+                localPrimes[offset++] = threadPrimes[threadIndex][value];
+            }
+            free(threadPrimes[threadIndex]);
         }
-        free(local_bufs[t]);
     }
-    free(local_bufs);
-    free(local_lens);
-    free(is_prime);
-    free(small_primes);
+    free(threadPrimes);
+    free(threadCounts);
+    free(threadCaps);
+    free(rankBlocks);
 
-    double t_compute_end = MPI_Wtime();
+    double computeEndTime = MPI_Wtime();
 
-    /* ==========================================================
-       PHASE 3: SERIAL COMMUNICATION & I/O (Gather and Write)
-       ========================================================== */
-    double t_comm_start = MPI_Wtime();
+    /* SERIAL GATHER, SORT AND WRITE */
+    double commStartTime = MPI_Wtime();
 
-    int send_count = (int)off; 
-    int *recv_counts = NULL, *displs = NULL;
-    char *final_buf = NULL;
-    int total_len = 0;
-
-    if (rank == 0) recv_counts = malloc((size_t)nprocs * sizeof(int));
-    MPI_Gather(&send_count, 1, MPI_INT, recv_counts, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    if (rank == 0) {
-        displs = malloc((size_t)nprocs * sizeof(int));
-        displs[0] = 0;
-        for (int r = 1; r < nprocs; r++) displs[r] = displs[r - 1] + recv_counts[r - 1];
-        total_len = displs[nprocs - 1] + recv_counts[nprocs - 1];
-        final_buf = malloc(total_len > 0 ? (size_t)total_len : 1);
+    int *recvCounts = NULL;
+    int *offsets = NULL;
+    if (rankId == 0) {
+        recvCounts = malloc(processCount * sizeof(int));
+        offsets = malloc(processCount * sizeof(int));
     }
 
-    MPI_Gatherv(proc_buf, send_count, MPI_CHAR,
-                final_buf, recv_counts, displs, MPI_CHAR,
+    // Collects each rank's prime count into receive buffer
+    MPI_Gather(&localPrimeCount, 1, MPI_INT, recvCounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    int totalPrimes = 0;
+    int *allPrimes = NULL;
+    // Create table of offsets for receive buffer to be used by MPI_Gatherv
+    if (rankId == 0) {
+        offsets[0] = 0;
+        for (int index = 1; index < processCount; index++) {
+            offsets[index] = offsets[index - 1] + recvCounts[index - 1];
+        }
+        totalPrimes = offsets[processCount - 1] + recvCounts[processCount - 1];
+        allPrimes = malloc((totalPrimes > 0 ? totalPrimes : 1) * sizeof(int));
+    }
+
+    // Creating final array
+    MPI_Gatherv(localPrimes, localPrimeCount, MPI_INT,
+                allPrimes, recvCounts, offsets, MPI_INT,
                 0, MPI_COMM_WORLD);
-    free(proc_buf);
 
-    if (rank == 0) {
-        const char *filename = "prime-out-hybrid.txt";
-        FILE *fp = fopen(filename, "w");
-        if (fp != NULL) {
-            fwrite(final_buf, 1, (size_t)total_len, fp);
-            fclose(fp);
-        }
-        free(final_buf);
-        free(recv_counts);
-        free(displs);
+    // Sorting final array as primes arrived out of order (blocks assigned round-robin
+    // across ranks, and within each rank, across threads too)
+    if (rankId == 0 && totalPrimes > 1) {
+        qsort(allPrimes, totalPrimes, sizeof(int), compare_and_cast_int);
     }
 
-    double t_comm_end = MPI_Wtime();
-
-    /* ==========================================================
-       TIMING REDUCTION AND ANALYSIS OUTPUT
-       ========================================================== */
-    double local_init = t_init_end - t_init_start;
-    double local_compute = t_compute_end - t_compute_start;
-    double local_comm = t_comm_end - t_comm_start;
-
-    double max_init, max_compute, max_comm;
-
-    MPI_Reduce(&local_init, &max_init, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_compute, &max_compute, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_comm, &max_comm, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-
-    if (rank == 0) {
-        double total_serial = max_init + max_comm;
-        double total_time = total_serial + max_compute;
-        
-        printf("\n--- Profiling Results (np=%d, threads=%d, n=%d) ---\n", nprocs, nthreads, n);
-        printf("T_serial_init : %f s\n", max_init);
-        printf("T_parallel    : %f s\n", max_compute);
-        printf("T_serial_comm : %f s\n", max_comm);
-        printf("----------------------------------------------------\n");
-        printf("Total Serial (T_s)  : %f s\n", total_serial);
-        printf("Total Parallel (T_p): %f s\n", max_compute);
-        printf("Total Execution     : %f s\n", total_time);
-        
-        // Exact fractions for Amdahl's and Gustafson's Laws
-        printf("Serial Fraction (1-f) : %f\n", total_serial / total_time);
-        printf("Parallel Fraction (f) : %f\n", max_compute / total_time);
-
-        FILE *log = fopen("timing_log_hybrid_detailed.csv", "a");
-        if (log != NULL) {
-            fprintf(log, "%d,%d,%d,%f,%f,%f,%f,%f\n",
-                    n, nprocs, nthreads, max_init, max_compute, max_comm, total_serial, total_time);
-            fclose(log);
+    // Writing sorted array to file
+    if (rankId == 0) {
+        int writeToFile = (maxNumber > 100) ? 1 : 0;
+        if (writeToFile) {
+            const char *fileName = "prime-openmpi-hybrid.txt";
+            FILE *filePointer = fopen(fileName, "w");
+            if (filePointer == NULL) {
+                printf("Error opening file!\n");
+            } else {
+                for (int value = 0; value < totalPrimes; value++) {
+                    fprintf(filePointer, "%d\n", allPrimes[value]);
+                }
+                fclose(filePointer);
+            }
         }
+        // Free rank 0 related metadata
+        free(allPrimes);
+        free(recvCounts);
+        free(offsets);
+    }
+    // Freeing the other ranks' metadata
+    free(localPrimes);
+
+    double commEndTime = MPI_Wtime();
+
+    /*  CODE FOR THE TIMING ANALYSIS
+        NOTE: This part was written using AI
+    */
+    double localInitTime = initEndTime - initStartTime;
+    double localComputeTime = computeEndTime - computeStartTime;
+    double localCommTime = commEndTime - commStartTime;
+
+    double maxInit, maxCompute, maxComm;
+
+    // We use MPI_MAX to find the slowest process in each phase,
+    // which represents the true "wall-clock" limit.
+    MPI_Reduce(&localInitTime, &maxInit, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&localComputeTime, &maxCompute, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&localCommTime, &maxComm, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    if (rankId == 0) {
+        double totalSerial = maxInit + maxComm;
+        double totalTime = totalSerial + maxCompute;
+
+        printf("\n--- Profiling Results (np=%d, threads=%d, n=%d) ---\n", processCount, threadCount, maxNumber);
+        printf("T_serial_init : %f s\n", maxInit);
+        printf("T_parallel    : %f s\n", maxCompute);
+        printf("T_serial_comm : %f s\n", maxComm);
+        printf("--------------------------------------\n");
+        printf("Total Serial (T_s)  : %f s\n", totalSerial);
+        printf("Total Parallel (T_p): %f s\n", maxCompute);
+        printf("Total Execution     : %f s\n", totalTime);
+
+        // These are the exact fractions you need for Amdahl's/Gustafson's Laws!
+        printf("Serial Fraction (f) : %f\n", totalSerial / totalTime);
+        printf("Parallel Fraction   : %f\n", maxCompute / totalTime);
     }
 
     MPI_Finalize();

@@ -9,172 +9,195 @@ Run:      mpirun -np 4 ./task1 100000000
 #include <stdlib.h>
 #include <mpi.h>
 
+/*
+Primality function
+Checks divisors of the form 6k+1 and up to sqrt(num) as all primes above three are of this format
+*/
 static inline int is_prime(int num)
 {
     if (num < 2) return 0;
     if (num == 2 || num == 3) return 1;
     if (num % 2 == 0 || num % 3 == 0) return 0;
 
-    for (int j = 5; (long long)j * j <= num; j += 6) {
-        if (num % j == 0 || num % (j + 2) == 0) return 0;
+    for (int divisor = 5; (long long)divisor * divisor <= num; divisor += 6) {
+        if (num % divisor == 0 || num % (divisor + 2) == 0) return 0;
     }
     return 1;
 }
 
-static int cmp_int(const void *a, const void *b)
+/*
+Utility function
+Casts pointers to integers and compares them
+*AI Declaration: This function was written with AI
+*/
+static int compare_and_cast_int(const void *leftValue, const void *rightValue)
 {
-    int ia = *(const int *)a;
-    int ib = *(const int *)b;
-    return (ia > ib) - (ia < ib);
+    int firstValue = *(const int *)leftValue;
+    int secondValue = *(const int *)rightValue;
+    return (firstValue > secondValue) - (firstValue < secondValue);
 }
 
 #define BLOCKS_PER_RANK 32
 
 int main(int argc, char *argv[])
 {
-    int rank, size;
+    int rankId, processCount;
     MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rankId);
+    MPI_Comm_size(MPI_COMM_WORLD, &processCount);
 
     /* SERIAL INITIALIZATION */
-    double t_init_start = MPI_Wtime();
-    
-    int n = 0;
-    if (rank == 0) {
+    double initStartTime = MPI_Wtime();
+
+    int maxNumber = 0;
+    if (rankId == 0) {
         if (argc < 2) {
             printf("Error: Please provide at least one argument.\n");
             printf("Usage: mpirun -np <procs> %s max_number\n", argv[0]);
-            n = -1; // Error flag
+            maxNumber = -1; // Error flag
         } else {
-            n = atoi(argv[1]);
+            maxNumber = atoi(argv[1]);
         }
     }
-    
-    // Broadcast n to all processes (creates measurable communication overhead)
-    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    if (n < 2) {
+    // Broadcast n to all processes (creates measurable communication overhead)
+    MPI_Bcast(&maxNumber, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (maxNumber < 2) {
         MPI_Finalize();
         return 1;
     }
-    
-    double t_init_end = MPI_Wtime();
+
+    double initEndTime = MPI_Wtime();
 
     /* PARALLEL COMPONENT */
-    double t_compute_start = MPI_Wtime();
+    double computeStartTime = MPI_Wtime();
 
-    int range = (n > 2) ? (n - 2) : 0;
-    int block_size = range / (size * BLOCKS_PER_RANK);
-    if (block_size < 1) block_size = 1;
-    int num_blocks = (range + block_size - 1) / block_size;
+    // Splitting range into small blocks, to then be taken in by each rank
+    int range = (maxNumber > 2) ? (maxNumber - 2) : 0;
+    int blockSize = range / (processCount * BLOCKS_PER_RANK);
+    if (blockSize < 1) blockSize = 1;
+    int numBlocks = (range + blockSize - 1) / blockSize;
 
-    int local_capacity = 1024;
-    int *local_primes = malloc(local_capacity * sizeof(int));
-    int local_prime_count = 0;
+    int localCapacity = 1024;
+    int *localPrimes = malloc(localCapacity * sizeof(int));
+    int localPrimeCount = 0;
 
-    for (int b = rank; b < num_blocks; b += size) {
-        int block_start = 2 + b * block_size;
-        int block_end = block_start + block_size;
-        if (block_end > n) block_end = n;
+    /* Blocks are assigned to ranks round-robin style for more even work distribution
+    EG. Rank 0 processes blocks 0,4,8... & Rank 1 processes 1,5,9... so that all ranks process both
+    larger and smaller primes, rather than processing only large or only small primes.
+    *AI Declaration: This section was modified with AI.
+    */
+    for (int blockIndex = rankId; blockIndex < numBlocks; blockIndex += processCount) {
+        int blockStart = 2 + blockIndex * blockSize;
+        int blockEnd = blockStart + blockSize;
+        if (blockEnd > maxNumber) blockEnd = maxNumber;
 
-        for (int i = block_start; i < block_end; i++) {
-            if (is_prime(i)) {
-                if (local_prime_count == local_capacity) {
-                    local_capacity *= 2;
-                    local_primes = realloc(local_primes, local_capacity * sizeof(int));
+        for (int value = blockStart; value < blockEnd; value++) {
+            if (is_prime(value)) {
+                if (localPrimeCount == localCapacity) {
+                    localCapacity *= 2;
+                    localPrimes = realloc(localPrimes, localCapacity * sizeof(int));
                 }
-                local_primes[local_prime_count++] = i;
+                localPrimes[localPrimeCount++] = value;
             }
         }
     }
 
-    double t_compute_end = MPI_Wtime();
+    double computeEndTime = MPI_Wtime();
 
     /* SERIAL GATHER, SORT AND WRITE */
-    double t_comm_start = MPI_Wtime();
+    double commStartTime = MPI_Wtime();
 
-    int *recv_counts = NULL;
-    int *displs = NULL;
-    if (rank == 0) {
-        recv_counts = malloc(size * sizeof(int));
-        displs = malloc(size * sizeof(int));
+    int *recvCounts = NULL;
+    int *offsets = NULL;
+    if (rankId == 0) {
+        recvCounts = malloc(processCount * sizeof(int));
+        offsets = malloc(processCount * sizeof(int));
     }
 
-    MPI_Gather(&local_prime_count, 1, MPI_INT, recv_counts, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    // Collects each rank's prime count into receive buffer
+    MPI_Gather(&localPrimeCount, 1, MPI_INT, recvCounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    int total_primes = 0;
-    int *all_primes = NULL;
-    if (rank == 0) {
-        displs[0] = 0;
-        for (int i = 1; i < size; i++) {
-            displs[i] = displs[i - 1] + recv_counts[i - 1];
+    int totalPrimes = 0;
+    int *allPrimes = NULL;
+    // Create table of offsets for receive buffer to be used by MPI_Gatherv
+    // NOTE: This part was modified with AI
+    if (rankId == 0) {
+        offsets[0] = 0;
+        for (int index = 1; index < processCount; index++) {
+            offsets[index] = offsets[index - 1] + recvCounts[index - 1];
         }
-        total_primes = displs[size - 1] + recv_counts[size - 1];
-        all_primes = malloc((total_primes > 0 ? total_primes : 1) * sizeof(int));
+        totalPrimes = offsets[processCount - 1] + recvCounts[processCount - 1];
+        allPrimes = malloc((totalPrimes > 0 ? totalPrimes : 1) * sizeof(int));
     }
 
-    MPI_Gatherv(local_primes, local_prime_count, MPI_INT,
-                all_primes, recv_counts, displs, MPI_INT,
+    // Creating final array
+    MPI_Gatherv(localPrimes, localPrimeCount, MPI_INT,
+                allPrimes, recvCounts, offsets, MPI_INT,
                 0, MPI_COMM_WORLD);
 
-    if (rank == 0 && total_primes > 1) {
-        qsort(all_primes, total_primes, sizeof(int), cmp_int);
+    // Sorting final array as primes arrived out of order (blocks were assigned round-robin style)
+    if (rankId == 0 && totalPrimes > 1) {
+        qsort(allPrimes, totalPrimes, sizeof(int), compare_and_cast_int);
     }
 
-    if (rank == 0) {
-        int write_to_file = (n > 100) ? 1 : 0;
-        if (write_to_file) {
-            const char *filename = "prime-openmpi.txt";
-            FILE *fp = fopen(filename, "w");
-            if (fp == NULL) {
+    // Writing sorted array to file
+    if (rankId == 0) {
+        int writeToFile = (maxNumber > 100) ? 1 : 0;
+        if (writeToFile) {
+            const char *fileName = "prime-openmpi.txt";
+            FILE *filePointer = fopen(fileName, "w");
+            if (filePointer == NULL) {
                 printf("Error opening file!\n");
             } else {
-                for (int i = 0; i < total_primes; i++) {
-                    fprintf(fp, "%d\n", all_primes[i]);
+                for (int value = 0; value < totalPrimes; value++) {
+                    fprintf(filePointer, "%d\n", allPrimes[value]);
                 }
-                fclose(fp);
+                fclose(filePointer);
             }
         }
-        free(all_primes);
-        free(recv_counts);
-        free(displs);
+        // Free rank 0 related metadata
+        free(allPrimes);
+        free(recvCounts);
+        free(offsets);
     }
-    free(local_primes);
+    // Freeing the other ranks' metadata
+    free(localPrimes);
 
-    double t_comm_end = MPI_Wtime();
+    double commEndTime = MPI_Wtime();
 
     /*  CODE FOR THE TIMING ANALYSIS
         NOTE: This part was written using AI
     */
-    double local_init_time = t_init_end - t_init_start;
-    double local_compute_time = t_compute_end - t_compute_start;
-    double local_comm_time = t_comm_end - t_comm_start;
+    double localInitTime = initEndTime - initStartTime;
+    double localComputeTime = computeEndTime - computeStartTime;
+    double localCommTime = commEndTime - commStartTime;
 
-    double max_init, max_compute, max_comm;
-    
+    double maxInit, maxCompute, maxComm;
+
     // We use MPI_MAX to find the slowest process in each phase,
     // which represents the true "wall-clock" limit.
-    MPI_Reduce(&local_init_time, &max_init, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_compute_time, &max_compute, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_comm_time, &max_comm, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&localInitTime, &maxInit, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&localComputeTime, &maxCompute, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&localCommTime, &maxComm, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
-    if (rank == 0) {
-        double total_serial = max_init + max_comm;
-        double total_time = total_serial + max_compute;
-        
-        printf("\n--- Profiling Results (np=%d, n=%d) ---\n", size, n);
-        printf("T_serial_init : %f s\n", max_init);
-        printf("T_parallel    : %f s\n", max_compute);
-        printf("T_serial_comm : %f s\n", max_comm);
+    if (rankId == 0) {
+        double totalSerial = maxInit + maxComm;
+        double totalTime = totalSerial + maxCompute;
+
+        printf("\n--- Profiling Results (np=%d, n=%d) ---\n", processCount, maxNumber);
+        printf("T_serial_init : %f s\n", maxInit);
+        printf("T_parallel    : %f s\n", maxCompute);
+        printf("T_serial_comm : %f s\n", maxComm);
         printf("--------------------------------------\n");
-        printf("Total Serial (T_s)  : %f s\n", total_serial);
-        printf("Total Parallel (T_p): %f s\n", max_compute);
-        printf("Total Execution     : %f s\n", total_time);
-        
+        printf("Total Serial (T_s)  : %f s\n", totalSerial);
+        printf("Total Parallel (T_p): %f s\n", maxCompute);
+        printf("Total Execution     : %f s\n", totalTime);
+
         // These are the exact fractions you need for Amdahl's/Gustafson's Laws!
-        printf("Serial Fraction (f) : %f\n", total_serial / total_time);
-        printf("Parallel Fraction   : %f\n", max_compute / total_time);
+        printf("Serial Fraction (f) : %f\n", totalSerial / totalTime);
+        printf("Parallel Fraction   : %f\n", maxCompute / totalTime);
     }
 
     MPI_Finalize();
